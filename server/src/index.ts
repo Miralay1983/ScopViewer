@@ -35,7 +35,8 @@ app.use('/api', fileRoutes);
 
 // In production, serve the Vite build
 if (process.env.NODE_ENV === 'production') {
-  const clientDist = path.resolve(process.cwd(), 'client/dist');
+  // process.cwd() is /opt/render/project/src/server, so client is at ../client/dist
+  const clientDist = path.resolve(process.cwd(), '../client/dist');
   app.use(express.static(clientDist));
   // Express 5 wildcard fix: use app.use instead of app.get('*')
   app.use((_req, res) => {
