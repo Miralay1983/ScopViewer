@@ -1224,9 +1224,10 @@ export class IFCViewerEngine {
         addLabel(p2, txt);
       }
 
-      // Dikey aks cizgileri — kesit yonune dik akslar
-      const vBot = bmin.y - margin;
-      const vTop = bmax.y + margin;
+      // Dikey aks cizgileri — yükseklik = grid elevasyonlarının aralığı
+      const elevValues = this.grids.map(g => g.elevation / scale);
+      const vBot = (elevValues.length > 0 ? Math.min(...elevValues) : bmin.y) - margin * 0.5;
+      const vTop = (elevValues.length > 0 ? Math.max(...elevValues) : bmax.y) + margin * 0.5;
       const allAxes = this.getAllGridAxes();
       const perpAxes = axisDir === 'vertical'
         ? allAxes.filter(a => a.direction === 'horizontal')
