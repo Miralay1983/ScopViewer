@@ -1156,98 +1156,112 @@ export class IFCViewerEngine {
     this.meshes.forEach(({ mesh }) => box.expandByObject(mesh));
     if (box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3());
+    const bmin = box.min;
+    const bmax = box.max;
+    const margin = Math.max(size.x, size.y, size.z) * 0.08;
 
-    // Modelin yatay genişliği kadar çizgi çiz (biraz aşan)
-    const halfSpan = Math.max(size.x, size.z) * 0.6;
-
-    const dashedMat = new THREE.LineDashedMaterial({
-      color: 0xffffff,
-      dashSize: 1.5,
-      gapSize: 0.8,
-      linewidth: 1,
+    const makeMat = (color: number) => new THREE.LineDashedMaterial({
+      color, dashSize: 0.35, gapSize: 0.18, linewidth: 1,
     });
 
+    const addLine = (p1: THREE.Vector3, p2: THREE.Vector3, color: number) => {
+      const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+      const line = new THREE.Line(geo, makeMat(color));
+      line.computeLineDistances();
+      this.scene.add(line);
+      this.sectionGridObjects.push(line);
+    };
+
+    const addLabel = (pos: THREE.Vector3, text: string, color = '#ffffff') => {
+      const div = document.createElement('div');
+      div.style.cssText = [
+        `color:${color}`,
+        'font-family:Inter,monospace,sans-serif',
+        'font-size:12px',
+        'font-weight:600',
+        'padding:0 5px',
+        'pointer-events:none',
+        'white-space:nowrap',
+        'text-shadow:0 1px 4px rgba(0,0,0,0.9)',
+      ].join(';');
+      div.textContent = text;
+      const lbl = new CSS2DObject(div);
+      lbl.position.copy(pos);
+      this.scene.add(lbl);
+      this.sectionGridObjects.push(lbl);
+    };
+
     if (viewType === 'vertical') {
-      // Dikey kesit — her kat kotunda yatay dashed çizgi göster
-      const seenElevations = new Set<number>();
+      // Yatay elevation cizgileri — gercek BB sinirlari
+      let hMin: number, hMax: number;
+      if (axisDir === 'vertical') {
+        hMin = bmin.z - margin; hMax = bmax.z + margin;
+      } else {
+        hMin = bmin.x - margin; hMax = bmax.x + margin;
+      }
+
+      const seenElev = new Set<string>();
       for (const grid of this.grids) {
         const elevM = grid.elevation / scale;
-        const key = elevM.toFixed(3);
-        if (seenElevations.has(+key)) continue;
-        seenElevations.add(+key);
+        const key = elevM.toFixed(2);
+        if (seenElev.has(key)) continue;
+        seenElev.add(key);
 
-        // Çizgi yönü: kamera bakış yönüne göre X veya Z doğrultusunda
+        const elevLabel = grid.elevation / 1000;
+        const sign = elevLabel >= 0 ? '+' : '';
+        const txt = `${sign}${elevLabel.toFixed(2)}`;
+
         let p1: THREE.Vector3, p2: THREE.Vector3;
         if (axisDir === 'vertical') {
-          // Kamera X'e bakıyor — çizgi Z doğrultusunda
-          p1 = new THREE.Vector3(center.x, elevM, center.z - halfSpan);
-          p2 = new THREE.Vector3(center.x, elevM, center.z + halfSpan);
+          p1 = new THREE.Vector3(center.x, elevM, hMin);
+          p2 = new THREE.Vector3(center.x, elevM, hMax);
         } else {
-          // Kamera Z'ye bakıyor — çizgi X doğrultusunda
-          p1 = new THREE.Vector3(center.x - halfSpan, elevM, center.z);
-          p2 = new THREE.Vector3(center.x + halfSpan, elevM, center.z);
+          p1 = new THREE.Vector3(hMin, elevM, center.z);
+          p2 = new THREE.Vector3(hMax, elevM, center.z);
         }
-
-        const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-        const line = new THREE.Line(geo, dashedMat.clone());
-        line.computeLineDistances();
-        this.scene.add(line);
-        this.sectionGridObjects.push(line);
-
-        // Etiket — sağ uçta CSS2D
-        const elevLabel = grid.elevation / 1000; // mm → m
-        const sign = elevLabel >= 0 ? '+' : '';
-        const labelText = `${sign}${elevLabel.toFixed(2)}`;
-
-        const div = document.createElement('div');
-        div.style.cssText = [
-          'color:#ffffff',
-          'font-family:Inter,sans-serif',
-          'font-size:13px',
-          'font-weight:500',
-          'letter-spacing:0.04em',
-          'padding:0 4px',
-          'pointer-events:none',
-          'white-space:nowrap',
-          'text-shadow:0 1px 3px rgba(0,0,0,0.8)',
-        ].join(';');
-        div.textContent = labelText;
-
-        const label = new CSS2DObject(div);
-        label.position.copy(p2);
-        this.scene.add(label);
-        this.sectionGridObjects.push(label);
+        addLine(p1, p2, 0xffffff);
+        addLabel(p1, txt);
+        addLabel(p2, txt);
       }
-    } else {
-      // Plan görünüm — U ve V akslarını göster
+
+      // Dikey aks cizgileri — kesit yonune dik akslar
+      const vBot = bmin.y - margin;
+      const vTop = bmax.y + margin;
       const allAxes = this.getAllGridAxes();
-      const grayMat = new THREE.LineDashedMaterial({
-        color: 0xaaaaaa, dashSize: 1.2, gapSize: 0.6,
-      });
-      for (const ax of allAxes) {
+      const perpAxes = axisDir === 'vertical'
+        ? allAxes.filter(a => a.direction === 'horizontal')
+        : allAxes.filter(a => a.direction === 'vertical');
+
+      for (const ax of perpAxes) {
+        const pos = ax.position / scale;
+        let p1: THREE.Vector3, p2: THREE.Vector3;
+        if (axisDir === 'vertical') {
+          p1 = new THREE.Vector3(center.x, vBot, pos);
+          p2 = new THREE.Vector3(center.x, vTop, pos);
+        } else {
+          p1 = new THREE.Vector3(pos, vBot, center.z);
+          p2 = new THREE.Vector3(pos, vTop, center.z);
+        }
+        addLine(p1, p2, 0x888888);
+        addLabel(p2, ax.name, '#aaaaaa');
+        addLabel(p1, ax.name, '#aaaaaa');
+      }
+
+    } else {
+      // Plan gorunum — U ve V akslar
+      for (const ax of this.getAllGridAxes()) {
         const pos = ax.position / scale;
         let p1: THREE.Vector3, p2: THREE.Vector3;
         if (ax.direction === 'vertical') {
-          p1 = new THREE.Vector3(pos, center.y, center.z - halfSpan);
-          p2 = new THREE.Vector3(pos, center.y, center.z + halfSpan);
+          p1 = new THREE.Vector3(pos, center.y, bmin.z - margin);
+          p2 = new THREE.Vector3(pos, center.y, bmax.z + margin);
         } else {
-          p1 = new THREE.Vector3(center.x - halfSpan, center.y, pos);
-          p2 = new THREE.Vector3(center.x + halfSpan, center.y, pos);
+          p1 = new THREE.Vector3(bmin.x - margin, center.y, pos);
+          p2 = new THREE.Vector3(bmax.x + margin, center.y, pos);
         }
-        const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-        const line = new THREE.Line(geo, grayMat.clone());
-        line.computeLineDistances();
-        this.scene.add(line);
-        this.sectionGridObjects.push(line);
-
-        // Aks adı etiketi
-        const div = document.createElement('div');
-        div.style.cssText = 'color:#cccccc;font-family:Inter,sans-serif;font-size:12px;pointer-events:none;';
-        div.textContent = ax.name;
-        const label = new CSS2DObject(div);
-        label.position.copy(p2);
-        this.scene.add(label);
-        this.sectionGridObjects.push(label);
+        addLine(p1, p2, 0xaaaaaa);
+        addLabel(p1, ax.name, '#cccccc');
+        addLabel(p2, ax.name, '#cccccc');
       }
     }
   }
