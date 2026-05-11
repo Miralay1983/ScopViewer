@@ -1,0 +1,297 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+/* ================================
+   DESIGN TOKENS
+   ================================ */
+:root {
+  --bg-primary: #06060b;
+  --bg-secondary: #0d0d14;
+  --bg-surface: #12121a;
+  --bg-elevated: #1a1a25;
+  --bg-glass: rgba(18, 18, 26, 0.65);
+
+  --text-primary: #f4f4f7;
+  --text-secondary: #9494a8;
+  --text-muted: #5e5e72;
+
+  --accent-indigo: #635bff;
+  --accent-indigo-light: #818cf8;
+  --accent-indigo-glow: rgba(99, 91, 255, 0.35);
+  --accent-emerald: #10b981;
+  --accent-emerald-glow: rgba(16, 185, 129, 0.25);
+  --accent-amber: #f59e0b;
+  --accent-rose: #f43f5e;
+  --accent-cyan: #06b6d4;
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(99, 91, 255, 0.4);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  --shadow-glow: 0 0 60px rgba(99, 91, 255, 0.15);
+  --shadow-card: 0 4px 30px rgba(0, 0, 0, 0.4);
+
+  --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-smooth: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ================================
+   RESET & BASE
+   ================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% 20%, rgba(99, 91, 255, 0.08), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 60%, rgba(16, 185, 129, 0.06), transparent);
+  pointer-events: none;
+  z-index: 0;
+}
+
+a {
+  color: var(--accent-indigo-light);
+  text-decoration: none;
+}
+
+/* ================================
+   ANIMATIONS
+   ================================ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 20px var(--accent-indigo-glow); }
+  50% { box-shadow: 0 0 40px var(--accent-indigo-glow); }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% center; }
+  to { background-position: 200% center; }
+}
+
+.animate-fade-up {
+  animation: fadeUp 0.6s var(--transition-smooth) forwards;
+}
+
+/* ================================
+   GLASS PANEL
+   ================================ */
+.glass-panel {
+  background: var(--bg-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+/* ================================
+   BUTTONS
+   ================================ */
+.btn {
+  padding: 0.7rem 1.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-family: inherit;
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-indigo), #7c3aed);
+  color: white;
+  box-shadow: 0 4px 20px var(--accent-indigo-glow);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px var(--accent-indigo-glow);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.04);
+  color: white;
+  border: 1px solid var(--border-subtle);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.btn-danger {
+  background: rgba(244, 63, 94, 0.1);
+  color: var(--accent-rose);
+  border: 1px solid rgba(244, 63, 94, 0.2);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.2);
+}
+
+.btn-sm {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+}
+
+/* ================================
+   INPUTS
+   ================================ */
+.input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  transition: border-color var(--transition-fast);
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--accent-indigo);
+  box-shadow: 0 0 0 3px rgba(99, 91, 255, 0.15);
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input-group label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ================================
+   SPINNER
+   ================================ */
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-subtle);
+  border-top-color: var(--accent-indigo);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-sm {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+}
+
+/* ================================
+   LOADING SCREEN
+   ================================ */
+.loading-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 16px;
+  flex-direction: column;
+}
+
+.loading-screen p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* ================================
+   ERROR / SUCCESS MESSAGES
+   ================================ */
+.alert {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.alert-error {
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  color: var(--accent-rose);
+}
+
+.alert-success {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: var(--accent-emerald);
+}
+
+/* ================================
+   SELECT
+   ================================ */
+.select {
+  padding: 0.5rem 0.8rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+
+.select:focus {
+  border-color: var(--accent-indigo);
+}

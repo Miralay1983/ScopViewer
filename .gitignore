@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+uploads/*
+!uploads/.gitkeep
+*.log
+*.sqlite
+.DS_Store
+client/.vite/
