@@ -158,7 +158,7 @@ export class IFCViewerEngine {
   }
 
   async loadIFC(url: string): Promise<void> {
-    // Initialize WebIFC for data extraction
+    // Initialize WebIFC for data extraction (properties/grids)
     this.ifcApi.SetWasmPath('/wasm/');
     await this.ifcApi.Init();
 
@@ -168,20 +168,31 @@ export class IFCViewerEngine {
     const buffer = await response.arrayBuffer();
     const data = new Uint8Array(buffer);
 
-    // Open the model
+    // Open with WebIFC for property extraction
     this.modelID = this.ifcApi.OpenModel(data);
 
-    // Load geometry with OBC
-    // @ts-ignore
-    await this.ifcLoader.setup({ wasm: { path: "/wasm/", absolute: true } });
-    this.ifcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true;
-    
-    // @ts-ignore
-    const model = await this.ifcLoader.load(data);
-    this.scene.add(model as any);
-    
+    // Load geometry with OBC IfcLoader (InstancedMesh / Fragment - fast render)
+    await this.ifcLoader.setup({
+      wasm: { path: '/wasm/', absolute: true },
+      webIfc: { COORDINATE_TO_ORIGIN: true },
+    });
+
+    // OBC v3 load(data, coordinate, name)
+    const model = await this.ifcLoader.load(data, true, url);
+
+    // FragmentsModel has a .mesh property (THREE.Group) or iterate children
+    // Try to get renderable object
+    const modelObject3D = (model as any).object ?? (model as any).mesh ?? (model as any).group ?? model;
+    if (modelObject3D && typeof (modelObject3D as any).isObject3D !== 'undefined') {
+      this.scene.add(modelObject3D);
+    } else {
+      // Fallback: try adding all mesh children
+      const children = (model as any).children ?? [];
+      for (const child of children) this.scene.add(child as any);
+    }
+
     this.meshes.push({
-      mesh: model as any,
+      mesh: modelObject3D as any,
       expressIds: new Uint32Array(0),
     });
 
