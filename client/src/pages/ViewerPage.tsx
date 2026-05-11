@@ -51,11 +51,8 @@ export default function ViewerPage() {
             setSelectedElement(null);
           } else {
             setSelectedElement(info);
-            // Bolt otomatik tespiti
-            if (info.boltDimensions) {
-              setLabelType('boltDimensions');
-              engine?.setLabelType('boltDimensions');
-            }
+            // NOT: labelType butonları değiştirilmiyor — seçili kalır
+            // Bolt bilgisi zaten property panelde görünür (boltDimensions alanı)
           }
         });
 
