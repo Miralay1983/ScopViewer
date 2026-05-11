@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { IFCViewerEngine } from '../lib/IFCViewerEngine';
@@ -23,6 +23,12 @@ export default function ViewerPage() {
   const [selectedAxis, setSelectedAxis] = useState<string>('');
   const [clipDepth, setClipDepth] = useState<number>(500);
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<number[]>([]);
+  const [searchIndexPct, setSearchIndexPct] = useState(0);
+  const [searchIndexDone, setSearchIndexDone] = useState(false);
+
   useEffect(() => {
     // Auth check
     api.me().catch(() => navigate('/login'));
@@ -45,6 +51,11 @@ export default function ViewerPage() {
             setSelectedElement(null);
           } else {
             setSelectedElement(info);
+            // Bolt otomatik tespiti
+            if (info.boltDimensions) {
+              setLabelType('boltDimensions');
+              engine?.setLabelType('boltDimensions');
+            }
           }
         });
 
@@ -63,6 +74,12 @@ export default function ViewerPage() {
         console.log(`[Viewer] Found ${axes.length} grid axes, ${grids.length} elevation grids`);
 
         setLoading(false);
+
+        // Arka planda search index olustur
+        engine.buildSearchIndex((pct, done) => {
+          setSearchIndexPct(pct);
+          if (done) setSearchIndexDone(true);
+        });
       } catch (err) {
         console.error('Viewer init error:', err);
         setError('IFC dosyası yüklenirken hata oluştu. Dosya geçerli bir IFC dosyası olmayabilir.');
@@ -80,12 +97,25 @@ export default function ViewerPage() {
     };
   }, [fileId]);
 
-  // Get file name
   useEffect(() => {
     if (!fileId) return;
-    // We don't have a direct endpoint, but we can try the dashboard data
     setFileName(`IFC Model #${fileId}`);
   }, [fileId]);
+
+  const doSearch = useCallback((q: string, lt: LabelType) => {
+    const engine = engineRef.current;
+    if (!engine || !searchIndexDone) return;
+    if (!q.trim()) { engine.clearSearchHighlights(); setSearchResults([]); return; }
+    const type = lt === 'assemblyMark' ? 'assemblyMark' : 'partMark';
+    const results = engine.searchByMark(q, type);
+    setSearchResults(results);
+    engine.highlightSearchResults(results);
+  }, [searchIndexDone]);
+
+  const handleSearch = (q: string) => { setSearchQuery(q); doSearch(q, labelType); };
+  const handleClearSearch = () => { setSearchQuery(''); setSearchResults([]); engineRef.current?.clearSearchHighlights(); };
+
+  useEffect(() => { if (searchIndexDone && searchQuery) doSearch(searchQuery, labelType); }, [searchIndexDone, doSearch, searchQuery, labelType]);
 
   const handleResetView = () => {
     engineRef.current?.resetView();
@@ -98,6 +128,7 @@ export default function ViewerPage() {
   const handleLabelTypeChange = (type: LabelType) => {
     setLabelType(type);
     engineRef.current?.setLabelType(type);
+    if (searchQuery) doSearch(searchQuery, type);
   };
 
   const handleGridAxisChange = (value: string) => {
@@ -170,18 +201,37 @@ export default function ViewerPage() {
             >
               Assembly Mark
             </button>
-            <button
-              className={`label-btn ${labelType === 'boltDimensions' ? 'active bolt' : ''}`}
-              onClick={() => handleLabelTypeChange('boltDimensions')}
-            >
-              Bolt Dim.
-            </button>
+          </div>
+
+          {/* Arama barı */}
+          <span className="toolbar-divider"></span>
+          <div className="search-bar-wrapper">
+            <svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input
+              type="text"
+              className="search-input"
+              placeholder={searchIndexDone
+                ? (labelType === 'assemblyMark' ? 'Assembly mark ara...' : 'Part mark ara...')
+                : `İndex hazırlanıyor... ${searchIndexPct}%`}
+              value={searchQuery}
+              onChange={e => handleSearch(e.target.value)}
+              disabled={!searchIndexDone}
+            />
+            {searchQuery && searchResults.length > 0 && (
+              <span className="search-count">{searchResults.length} sonuç</span>
+            )}
+            {searchQuery && (
+              <button className="search-clear" onClick={handleClearSearch} title="Temizle">×</button>
+            )}
           </div>
 
           {/* Grid Axis Dropdown */}
           {gridAxes.length > 0 && (
             <>
               <span className="toolbar-divider"></span>
+
               <div className="grid-selector">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" strokeWidth="2">
                   <line x1="3" y1="3" x2="3" y2="21"/><line x1="9" y1="3" x2="9" y2="21"/>

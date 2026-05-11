@@ -77,7 +77,22 @@ export class IFCViewerEngine {
   private gridScaleFactor: number | null = null;
   private clipPlanes: THREE.Plane[] = [];
   private clipDepthMm = 500;
-  private sectionGridObjects: THREE.Object3D[] = []; // dashed axis lines + labels
+  private sectionGridObjects: THREE.Object3D[] = [];
+  // Hide/show element state
+  private hiddenExpressIds = new Set<number>();
+  private savedVertexData = new Map<number, Array<{ geo: THREE.BufferGeometry; vi: number; x: number; y: number; z: number }>>();
+  private lastSelectedExpressId?: number;
+  private ctxMenu?: HTMLDivElement;
+  // Search index
+  private allExpressIds = new Set<number>();
+  private partMarkIndex = new Map<string, number[]>();
+  private assemblyMarkIndex = new Map<string, number[]>();
+  private searchHighlightObjects: THREE.Object3D[] = [];
+  // Long press (mobile context menu)
+  private longPressTimer?: ReturnType<typeof setTimeout>;
+  private longPressX = 0;
+  private longPressY = 0;
+  private longPressMoved = false;
 
   constructor(container: HTMLDivElement) {
     this.container = container;
@@ -147,6 +162,11 @@ export class IFCViewerEngine {
 
     // Events
     container.addEventListener('click', this.handleClick);
+    container.addEventListener('contextmenu', this.handleContextMenu);
+    // Long press for mobile (iOS doesn't fire contextmenu on canvas reliably)
+    container.addEventListener('touchstart', this.handleTouchStart, { passive: false });
+    container.addEventListener('touchmove', this.handleTouchMove, { passive: true });
+    container.addEventListener('touchend', this.handleTouchEnd, { passive: true });
     window.addEventListener('resize', this.handleResize);
 
     // Render loop
@@ -189,6 +209,7 @@ export class IFCViewerEngine {
       const flatMesh = flatMeshes.get(i);
       const expressId = flatMesh.expressID;
       const placedGeometries = flatMesh.geometries;
+      this.allExpressIds.add(expressId); // for search index
 
       for (let j = 0; j < placedGeometries.size(); j++) {
         const pg = placedGeometries.get(j);
@@ -288,13 +309,22 @@ export class IFCViewerEngine {
   }
 
   private handleClick = async (event: MouseEvent): Promise<void> => {
+    // Sag tus menusunu kapat
+    this.closeContextMenu();
+
     const bounds = this.container.getBoundingClientRect();
     this.mouse.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
     this.mouse.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
 
     this.raycaster.setFromCamera(this.mouse, this.activeCamera);
     const allMeshObjects = this.meshes.map(m => m.mesh);
-    const intersects = this.raycaster.intersectObjects(allMeshObjects, false);
+    const rawIntersects = this.raycaster.intersectObjects(allMeshObjects, false);
+
+    // Clip plane filtresi: sadece gorunen kesit icindeki elemanlar
+    const intersects = rawIntersects.filter(hit =>
+      this.clipPlanes.length === 0 ||
+      this.clipPlanes.every(plane => plane.distanceToPoint(hit.point) >= -0.01)
+    );
 
     if (intersects.length > 0) {
       const hit = intersects[0];
@@ -305,20 +335,310 @@ export class IFCViewerEngine {
         const attr = (hit.object as THREE.Mesh).geometry.getAttribute('expressId');
         if (attr) expressId = Math.round(attr.getX(hit.face.a));
       }
-      // Fallback for non-merged meshes
       if (expressId === undefined) expressId = hit.object.userData.expressId as number;
 
       if (expressId !== undefined && expressId !== -1) {
+        this.lastSelectedExpressId = expressId;
         this.highlightElement(hit.object as THREE.Mesh, expressId);
         const info = await this.getElementInfo(expressId, hit.point);
         if (this.onClickCallback) this.onClickCallback(info);
       }
     } else {
+      this.lastSelectedExpressId = undefined;
       this.clearHighlight();
       this.removeAllLabels();
       if (this.onClickCallback) this.onClickCallback({ expressId: -1, propertySets: [] });
     }
   };
+
+  private handleContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+    this.showContextMenu(event.clientX, event.clientY);
+  };
+
+  // ── Long press handlers (mobile) ──────────────────────────────────
+  private handleTouchStart = (event: TouchEvent): void => {
+    if (event.touches.length !== 1) return;
+    const t = event.touches[0];
+    this.longPressX = t.clientX;
+    this.longPressY = t.clientY;
+    this.longPressMoved = false;
+    this.longPressTimer = setTimeout(() => {
+      if (!this.longPressMoved) {
+        this.showContextMenu(this.longPressX, this.longPressY);
+      }
+    }, 600); // 600ms hold
+  };
+
+  private handleTouchMove = (): void => {
+    // If finger moved, cancel long press
+    this.longPressMoved = true;
+    if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = undefined; }
+  };
+
+  private handleTouchEnd = (): void => {
+    if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = undefined; }
+  };
+
+  private showContextMenu(x: number, y: number): void {
+    this.closeContextMenu();
+
+    const menu = document.createElement('div');
+    menu.style.cssText = [
+      'position:fixed',
+      `left:${x}px`,
+      `top:${y}px`,
+      'background:rgba(16,18,28,0.97)',
+      'border:1px solid rgba(255,255,255,0.12)',
+      'border-radius:10px',
+      'padding:6px 0',
+      'z-index:99999',
+      'min-width:180px',
+      'box-shadow:0 12px 40px rgba(0,0,0,0.7)',
+      'backdrop-filter:blur(12px)',
+      'font-family:Inter,sans-serif',
+      'font-size:13px',
+    ].join(';');
+
+    const mkItem = (icon: string, label: string, disabled: boolean, onClick: () => void) => {
+      const item = document.createElement('div');
+      item.style.cssText = [
+        `padding:9px 16px`,
+        `color:${disabled ? '#555' : '#e8e8f0'}`,
+        `cursor:${disabled ? 'default' : 'pointer'}`,
+        'display:flex',
+        'align-items:center',
+        'gap:10px',
+        'transition:background 0.12s',
+      ].join(';');
+      item.innerHTML = `<span style="font-size:15px">${icon}</span><span>${label}</span>`;
+      if (!disabled) {
+        item.onmouseenter = () => { item.style.background = 'rgba(255,255,255,0.08)'; };
+        item.onmouseleave = () => { item.style.background = 'transparent'; };
+        item.onclick = () => { onClick(); this.closeContextMenu(); };
+      }
+      menu.appendChild(item);
+    };
+
+    const addSep = () => {
+      const sep = document.createElement('div');
+      sep.style.cssText = 'height:1px;background:rgba(255,255,255,0.08);margin:4px 0';
+      menu.appendChild(sep);
+    };
+
+    const hasSelected = this.lastSelectedExpressId !== undefined;
+    const hasHidden = this.hiddenExpressIds.size > 0;
+
+    // Secim grubu
+    mkItem('\uD83D\uDE48', 'Seçiliyi Gizle', !hasSelected, () => {
+      if (this.lastSelectedExpressId !== undefined) this.hideElement(this.lastSelectedExpressId);
+    });
+    mkItem('\uD83D\uDC65', 'Seçilmeyenleri Gizle', !hasSelected, () => this.hideUnselected());
+    mkItem('\uD83D\uDD2D', 'Seçiliye Odaklan', !hasSelected, () => this.fitToSelected());
+
+    addSep();
+
+    // Gorünurluk grubu
+    mkItem('\uD83D\uDC41\uFE0F', `Tümünü Göster (${this.hiddenExpressIds.size})`, !hasHidden, () => this.showAllElements());
+    mkItem('\uD83C\uDFE0', 'Görünümü Sıfırla', false, () => this.resetView());
+
+    addSep();
+
+    // Araclar
+    mkItem('\uD83C\uDFF7\uFE0F', 'Etiketleri Temizle', false, () => this.removeAllLabels());
+    mkItem('\u2728', 'Arama Vurgularını Temizle', this.searchHighlightObjects.length === 0,
+      () => this.clearSearchHighlights());
+
+    document.body.appendChild(menu);
+    this.ctxMenu = menu;
+
+    // Disari tiklaninca kapat
+    const close = (e: MouseEvent) => {
+      if (!menu.contains(e.target as Node)) {
+        this.closeContextMenu();
+        document.removeEventListener('mousedown', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', close), 0);
+  }
+
+  private closeContextMenu(): void {
+    if (this.ctxMenu) { this.ctxMenu.remove(); this.ctxMenu = undefined; }
+  }
+
+  /** Secili elemani gizle (pozisyonlari saklar, geri yukleme icin) */
+  hideElement(expressId: number): void {
+    if (this.hiddenExpressIds.has(expressId)) return;
+    this.hiddenExpressIds.add(expressId);
+    const saved: Array<{ geo: THREE.BufferGeometry; vi: number; x: number; y: number; z: number }> = [];
+
+    for (const { mesh } of this.meshes) {
+      const geo = mesh.geometry;
+      const eidAttr = geo.getAttribute('expressId');
+      const posAttr = geo.getAttribute('position');
+      if (!eidAttr || !posAttr) continue;
+
+      const eids = eidAttr.array as Float32Array;
+      const pos = posAttr.array as Float32Array;
+      let changed = false;
+
+      for (let vi = 0; vi < eids.length; vi++) {
+        if (Math.round(eids[vi]) === expressId) {
+          saved.push({ geo, vi, x: pos[vi*3], y: pos[vi*3+1], z: pos[vi*3+2] });
+          pos[vi*3] = 0; pos[vi*3+1] = 0; pos[vi*3+2] = 0;
+          changed = true;
+        }
+      }
+      if (changed) posAttr.needsUpdate = true;
+    }
+
+    this.savedVertexData.set(expressId, saved);
+    this.clearHighlight();
+    this.lastSelectedExpressId = undefined;
+  }
+
+  /** Belirli bir elemani tekrar goster */
+  showElement(expressId: number): void {
+    const saved = this.savedVertexData.get(expressId);
+    if (!saved) return;
+    for (const { geo, vi, x, y, z } of saved) {
+      const pos = geo.getAttribute('position').array as Float32Array;
+      pos[vi*3] = x; pos[vi*3+1] = y; pos[vi*3+2] = z;
+      geo.getAttribute('position').needsUpdate = true;
+    }
+    this.hiddenExpressIds.delete(expressId);
+    this.savedVertexData.delete(expressId);
+  }
+
+  /** Gizlenen tum elemanlari geri goster */
+  showAllElements(): void {
+    for (const expressId of [...this.hiddenExpressIds]) {
+      this.showElement(expressId);
+    }
+  }
+
+  /** Secilenlerin disindaki tum elemanlari gizle */
+  hideUnselected(): void {
+    if (this.lastSelectedExpressId === undefined) return;
+    const keep = this.lastSelectedExpressId;
+    for (const eid of [...this.allExpressIds]) {
+      if (eid !== keep && !this.hiddenExpressIds.has(eid)) {
+        this.hideElement(eid);
+      }
+    }
+  }
+
+  /** Model sinirlarini hesaplayip kameraya sigidir */
+  fitToElements(expressIds: number[]): void {
+    const eidSet = new Set(expressIds);
+    const box = new THREE.Box3();
+    for (const { mesh } of this.meshes) {
+      const geo = mesh.geometry;
+      const eidAttr = geo.getAttribute('expressId');
+      const posAttr = geo.getAttribute('position');
+      if (!eidAttr || !posAttr) continue;
+      const eids = eidAttr.array as Float32Array;
+      const pos = posAttr.array as Float32Array;
+      for (let vi = 0; vi < eids.length; vi++) {
+        if (eidSet.has(Math.round(eids[vi]))) {
+          box.expandByPoint(new THREE.Vector3(pos[vi*3], pos[vi*3+1], pos[vi*3+2]));
+        }
+      }
+    }
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const dist = Math.max(size.x, size.y, size.z) * 2.5;
+    this.perspCamera.position.set(center.x + dist * 0.5, center.y + dist * 0.7, center.z + dist * 0.5);
+    this.controls.target.copy(center);
+    this.controls.update();
+  }
+
+  /** Secili elemana odaklan */
+  fitToSelected(): void {
+    if (this.lastSelectedExpressId !== undefined) {
+      this.fitToElements([this.lastSelectedExpressId]);
+    }
+  }
+
+  /** Search index olustur (async, model yuklendikten sonra cagrilir) */
+  async buildSearchIndex(onProgress?: (pct: number, done: boolean) => void): Promise<void> {
+    this.partMarkIndex.clear();
+    this.assemblyMarkIndex.clear();
+    const ids = [...this.allExpressIds];
+    const batchSize = 40;
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const batch = ids.slice(i, i + batchSize);
+      for (const eid of batch) {
+        try {
+          const info = await this.getElementInfo(eid);
+          if (info.partMark) {
+            const k = info.partMark.toLowerCase();
+            if (!this.partMarkIndex.has(k)) this.partMarkIndex.set(k, []);
+            this.partMarkIndex.get(k)!.push(eid);
+          }
+          if (info.assemblyMark) {
+            const k = info.assemblyMark.toLowerCase();
+            if (!this.assemblyMarkIndex.has(k)) this.assemblyMarkIndex.set(k, []);
+            this.assemblyMarkIndex.get(k)!.push(eid);
+          }
+        } catch { /* skip */ }
+      }
+      if (onProgress) onProgress(Math.min(99, Math.round((i + batchSize) / ids.length * 100)), false);
+      await new Promise(r => setTimeout(r, 0)); // yield to UI
+    }
+    if (onProgress) onProgress(100, true);
+  }
+
+  /** Mark ile arama — icinden gec */
+  searchByMark(query: string, type: 'partMark' | 'assemblyMark'): number[] {
+    if (!query.trim()) return [];
+    const index = type === 'partMark' ? this.partMarkIndex : this.assemblyMarkIndex;
+    const q = query.toLowerCase().trim();
+    const results: number[] = [];
+    for (const [key, ids] of index) {
+      if (key.includes(q)) results.push(...ids);
+    }
+    return [...new Set(results)];
+  }
+
+  /** Arama sonuclarini altin rengi wireframe box ile vurgula */
+  highlightSearchResults(expressIds: number[]): void {
+    this.clearSearchHighlights();
+    const gold = new THREE.Color(0xffd700);
+    for (const eid of expressIds.slice(0, 300)) {
+      const box = new THREE.Box3();
+      for (const { mesh } of this.meshes) {
+        const geo = mesh.geometry;
+        const eidAttr = geo.getAttribute('expressId');
+        const posAttr = geo.getAttribute('position');
+        if (!eidAttr || !posAttr) continue;
+        const eids = eidAttr.array as Float32Array;
+        const pos = posAttr.array as Float32Array;
+        for (let vi = 0; vi < eids.length; vi++) {
+          if (Math.round(eids[vi]) === eid) {
+            box.expandByPoint(new THREE.Vector3(pos[vi*3], pos[vi*3+1], pos[vi*3+2]));
+          }
+        }
+      }
+      if (!box.isEmpty()) {
+        const helper = new THREE.Box3Helper(box, gold);
+        this.scene.add(helper);
+        this.searchHighlightObjects.push(helper);
+      }
+    }
+  }
+
+  clearSearchHighlights(): void {
+    for (const obj of this.searchHighlightObjects) {
+      this.scene.remove(obj);
+      if ((obj as any).geometry) (obj as any).geometry.dispose();
+    }
+    this.searchHighlightObjects = [];
+  }
+
+  get hiddenCount(): number { return this.hiddenExpressIds.size; }
+  get isSearchIndexReady(): boolean { return this.partMarkIndex.size > 0 || this.assemblyMarkIndex.size > 0; }
 
   private highlightElement(mesh: THREE.Mesh, clickedId: number): void {
     this.clearHighlight();
@@ -1302,6 +1622,12 @@ export class IFCViewerEngine {
   dispose(): void {
     window.removeEventListener('resize', this.handleResize);
     this.container.removeEventListener('click', this.handleClick);
+    this.container.removeEventListener('contextmenu', this.handleContextMenu);
+    this.container.removeEventListener('touchstart', this.handleTouchStart);
+    this.container.removeEventListener('touchmove', this.handleTouchMove);
+    this.container.removeEventListener('touchend', this.handleTouchEnd);
+    if (this.longPressTimer) clearTimeout(this.longPressTimer);
+    this.closeContextMenu();
     if (this.animationId) cancelAnimationFrame(this.animationId);
     this.removeAllLabels();
     this.clearHighlight();
