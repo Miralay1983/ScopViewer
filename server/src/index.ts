@@ -37,7 +37,8 @@ app.use('/api', fileRoutes);
 if (process.env.NODE_ENV === 'production') {
   const clientDist = path.resolve(process.cwd(), 'client/dist');
   app.use(express.static(clientDist));
-  app.get('*', (_req, res) => {
+  // Express 5 wildcard fix: use app.use instead of app.get('*')
+  app.use((_req, res) => {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
