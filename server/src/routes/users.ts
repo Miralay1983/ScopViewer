@@ -73,7 +73,7 @@ router.post('/', async (req: Request, res: Response) => {
 // DELETE /api/users/:id — Kullanıcı sil
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parseInt(req.params.id as string);
     
     if (userId === req.user!.id) {
       res.status(400).json({ error: 'Kendinizi silemezsiniz' });

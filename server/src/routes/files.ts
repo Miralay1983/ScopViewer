@@ -42,7 +42,7 @@ router.use(requireAuth);
 // GET /api/projects/:projectId/files — Projedeki dosyalar
 router.get('/projects/:projectId/files', async (req: Request, res: Response) => {
   try {
-    const projectId = parseInt(req.params.projectId);
+    const projectId = parseInt(req.params.projectId as string);
     const db = await getDb();
 
     // Verify project ownership
@@ -71,7 +71,7 @@ router.get('/projects/:projectId/files', async (req: Request, res: Response) => 
 // POST /api/projects/:projectId/files — IFC dosyası yükle
 router.post('/projects/:projectId/files', upload.single('file'), async (req: Request, res: Response) => {
   try {
-    const projectId = parseInt(req.params.projectId);
+    const projectId = parseInt(req.params.projectId as string);
     const db = await getDb();
 
     // Verify project ownership
@@ -120,7 +120,7 @@ router.post('/projects/:projectId/files', upload.single('file'), async (req: Req
 // GET /api/files/:id/download — IFC dosyası indir (stream)
 router.get('/files/:id/download', async (req: Request, res: Response) => {
   try {
-    const fileId = parseInt(req.params.id);
+    const fileId = parseInt(req.params.id as string);
     const db = await getDb();
 
     const result = await db.execute({

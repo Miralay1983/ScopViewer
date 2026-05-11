@@ -63,7 +63,7 @@ router.post('/', async (req: Request, res: Response) => {
 // DELETE /api/projects/:id — Proje + dosyalarını sil
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const projectId = parseInt(req.params.id);
+    const projectId = parseInt(req.params.id as string);
     const db = await getDb();
 
     // Verify ownership
