@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 import { getDb } from './db.js';
@@ -12,8 +11,10 @@ import userRoutes from './routes/users.js';
 import projectRoutes from './routes/projects.js';
 import fileRoutes from './routes/files.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// In production (Render), env vars come from the dashboard — no .env file needed
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
+}
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001');
@@ -34,7 +35,7 @@ app.use('/api', fileRoutes);
 
 // In production, serve the Vite build
 if (process.env.NODE_ENV === 'production') {
-  const clientDist = path.resolve(__dirname, '../../client/dist');
+  const clientDist = path.resolve(process.cwd(), 'client/dist');
   app.use(express.static(clientDist));
   app.get('*', (_req, res) => {
     res.sendFile(path.join(clientDist, 'index.html'));
