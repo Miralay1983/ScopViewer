@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import * as WebIFC from 'web-ifc';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Extend THREE with BVH — enables fast raycasting on all meshes globally
 (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
@@ -70,7 +71,7 @@ export class IFCViewerEngine {
     depthTest: false,
   });
   private onClickCallback?: (info: ElementInfo) => void;
-  private needsRender = false;
+  private animationId?: number;
   private currentLabelType: LabelType = 'partMark';
   private grids: GridInfo[] = [];
   private gridScaleFactor: number | null = null;
@@ -149,13 +150,8 @@ export class IFCViewerEngine {
     container.addEventListener('click', this.handleClick);
     window.addEventListener('resize', this.handleResize);
 
-    // On-demand render: sadece kontroller hareket ettiğinde render et
-    this.controls.addEventListener('change', this.requestRender);
-    this.controls.addEventListener('start', this.startContinuousRender);
-    this.controls.addEventListener('end', this.stopContinuousRender);
-
-    // İlk frame
-    this.requestRender();
+    // Render loop
+    this.animate();
   }
 
   async loadIFC(url: string): Promise<void> {
@@ -180,6 +176,14 @@ export class IFCViewerEngine {
   }
 
   private loadAllMeshes(): void {
+    // Group geometries by color to minimize draw calls
+    interface GeoGroup {
+      geos: THREE.BufferGeometry[];
+      color: THREE.Color;
+      opacity: number;
+    }
+    const groups = new Map<string, GeoGroup>();
+
     const flatMeshes = this.ifcApi.LoadAllGeometry(this.modelID);
 
     for (let i = 0; i < flatMeshes.size(); i++) {
@@ -188,69 +192,78 @@ export class IFCViewerEngine {
       const placedGeometries = flatMesh.geometries;
 
       for (let j = 0; j < placedGeometries.size(); j++) {
-        const placedGeometry = placedGeometries.get(j);
-        const geometry = this.ifcApi.GetGeometry(this.modelID, placedGeometry.geometryExpressID);
-
+        const pg = placedGeometries.get(j);
+        const geometry = this.ifcApi.GetGeometry(this.modelID, pg.geometryExpressID);
         const verts = this.ifcApi.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
         const indices = this.ifcApi.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
+        const geo = this.createBufferGeometry(verts, indices);
 
-        const bufferGeometry = this.createBufferGeometry(verts, indices);
-        
-        // Apply transform
-        const matrix = new THREE.Matrix4();
-        matrix.fromArray(placedGeometry.flatTransformation);
+        // Bake transform into geometry (needed for merging)
+        const matrix = new THREE.Matrix4().fromArray(pg.flatTransformation);
+        geo.applyMatrix4(matrix);
 
-        const color = placedGeometry.color;
-        const material = new THREE.MeshPhongMaterial({
-          color: new THREE.Color(color.x, color.y, color.z),
-          opacity: color.w,
-          transparent: color.w < 1,
-          side: THREE.DoubleSide,
-        });
+        // Tag every vertex with its expressId
+        const count = geo.getAttribute('position').count;
+        geo.setAttribute('expressId', new THREE.BufferAttribute(
+          new Float32Array(count).fill(expressId), 1
+        ));
 
-        const mesh = new THREE.Mesh(bufferGeometry, material);
-        mesh.applyMatrix4(matrix);
-        mesh.userData.expressId = expressId;
+        // Round color for grouping (reduce unique materials)
+        const c = pg.color;
+        const r = Math.round(c.x * 10) / 10;
+        const g = Math.round(c.y * 10) / 10;
+        const b = Math.round(c.z * 10) / 10;
+        const a = c.w < 0.99 ? 0.4 : 1.0; // only two opacity levels
+        const key = `${r},${g},${b},${a}`;
 
-        this.scene.add(mesh);
-        this.meshes.push({
-          mesh,
-          expressIds: new Uint32Array([expressId]),
-        });
-
+        if (!groups.has(key)) {
+          groups.set(key, { geos: [], color: new THREE.Color(r, g, b), opacity: a });
+        }
+        groups.get(key)!.geos.push(geo);
         geometry.delete();
       }
     }
 
-    // Fit camera to scene
+    // Merge each color group into a single mesh
+    for (const [, group] of groups) {
+      const merged = mergeGeometries(group.geos, false);
+      for (const g of group.geos) g.dispose();
+      if (!merged) continue;
+
+      // Build BVH on merged geometry
+      (merged as any).computeBoundsTree();
+
+      const material = new THREE.MeshPhongMaterial({
+        color: group.color,
+        opacity: group.opacity,
+        transparent: group.opacity < 1,
+        side: THREE.DoubleSide,
+      });
+
+      const mesh = new THREE.Mesh(merged, material);
+      this.scene.add(mesh);
+      this.meshes.push({ mesh, expressIds: new Uint32Array(0) });
+    }
+
     this.fitToScene();
     this.requestRender();
   }
 
   private createBufferGeometry(verts: Float32Array, indices: Uint32Array): THREE.BufferGeometry {
     const geometry = new THREE.BufferGeometry();
-
-    // web-ifc provides interleaved data: position(3) + normal(3) per vertex
     const posFloats = new Float32Array(verts.length / 2);
     const normFloats = new Float32Array(verts.length / 2);
-
     for (let i = 0; i < verts.length / 6; i++) {
-      posFloats[i * 3 + 0] = verts[i * 6 + 0];
+      posFloats[i * 3]     = verts[i * 6];
       posFloats[i * 3 + 1] = verts[i * 6 + 1];
       posFloats[i * 3 + 2] = verts[i * 6 + 2];
-
-      normFloats[i * 3 + 0] = verts[i * 6 + 3];
+      normFloats[i * 3]     = verts[i * 6 + 3];
       normFloats[i * 3 + 1] = verts[i * 6 + 4];
       normFloats[i * 3 + 2] = verts[i * 6 + 5];
     }
-
     geometry.setAttribute('position', new THREE.BufferAttribute(posFloats, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(normFloats, 3));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-
-    // Build BVH acceleration structure — dramatically speeds up raycasting
-    (geometry as any).computeBoundsTree();
-
     return geometry;
   }
 
@@ -286,33 +299,68 @@ export class IFCViewerEngine {
 
     if (intersects.length > 0) {
       const hit = intersects[0];
-      const expressId = hit.object.userData.expressId as number;
 
-      if (expressId !== undefined) {
-        // Highlight
-        this.highlightElement(hit.object as THREE.Mesh);
+      // Read expressId from vertex attribute (merged geometry)
+      let expressId: number | undefined;
+      if (hit.face !== null && hit.face !== undefined) {
+        const attr = (hit.object as THREE.Mesh).geometry.getAttribute('expressId');
+        if (attr) expressId = Math.round(attr.getX(hit.face.a));
+      }
+      // Fallback for non-merged meshes
+      if (expressId === undefined) expressId = hit.object.userData.expressId as number;
 
-        // Get properties
+      if (expressId !== undefined && expressId !== -1) {
+        this.highlightElement(hit.object as THREE.Mesh, expressId);
         const info = await this.getElementInfo(expressId, hit.point);
-        if (this.onClickCallback) {
-          this.onClickCallback(info);
-        }
+        if (this.onClickCallback) this.onClickCallback(info);
       }
     } else {
       this.clearHighlight();
       this.removeAllLabels();
-      if (this.onClickCallback) {
-        this.onClickCallback({ expressId: -1, propertySets: [] });
-      }
+      if (this.onClickCallback) this.onClickCallback({ expressId: -1, propertySets: [] });
     }
   };
 
-  private highlightElement(mesh: THREE.Mesh): void {
+  private highlightElement(mesh: THREE.Mesh, clickedId: number): void {
     this.clearHighlight();
-    this.highlightMesh = new THREE.Mesh(mesh.geometry.clone(), this.highlightMaterial);
-    this.highlightMesh.applyMatrix4(mesh.matrixWorld);
-    this.scene.add(this.highlightMesh);
-    this.requestRender();
+    const geom = mesh.geometry;
+    const eidAttr = geom.getAttribute('expressId');
+
+    if (!eidAttr || !geom.getIndex()) {
+      // Legacy single mesh
+      this.highlightMesh = new THREE.Mesh(geom.clone(), this.highlightMaterial);
+      this.highlightMesh.applyMatrix4(mesh.matrixWorld);
+    } else {
+      // Extract only the faces belonging to clickedId
+      const indexArr = geom.getIndex()!.array as Uint32Array;
+      const posArr = geom.getAttribute('position').array as Float32Array;
+      const eids = eidAttr.array as Float32Array;
+      const newPos: number[] = [];
+      const newIdx: number[] = [];
+      const remap = new Map<number, number>();
+      for (let i = 0; i < indexArr.length; i += 3) {
+        const a = indexArr[i], b = indexArr[i+1], c = indexArr[i+2];
+        if (Math.round(eids[a]) !== clickedId) continue;
+        for (const v of [a, b, c]) {
+          if (!remap.has(v)) {
+            remap.set(v, newPos.length / 3);
+            newPos.push(posArr[v*3], posArr[v*3+1], posArr[v*3+2]);
+          }
+          newIdx.push(remap.get(v)!);
+        }
+      }
+      if (newPos.length > 0) {
+        const hg = new THREE.BufferGeometry();
+        hg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(newPos), 3));
+        hg.setIndex(newIdx);
+        this.highlightMesh = new THREE.Mesh(hg, this.highlightMaterial);
+      }
+    }
+
+    if (this.highlightMesh) {
+      this.scene.add(this.highlightMesh);
+      this.requestRender();
+    }
   }
 
   private clearHighlight(): void {
@@ -1080,39 +1128,14 @@ export class IFCViewerEngine {
     return this.clipDepthMm;
   }
 
-  // On-demand rendering system
-  private renderLoopActive = false;
-  private animationId?: number;
-
-  /** Tek frame render talep et */
-  requestRender = (): void => {
-    if (!this.needsRender) {
-      this.needsRender = true;
-      this.animationId = requestAnimationFrame(this.renderFrame);
-    }
-  };
-
-  /** Kontrol sürüklenirken sürekli render */
-  private startContinuousRender = (): void => {
-    this.renderLoopActive = true;
-    this.renderFrame();
-  };
-
-  private stopContinuousRender = (): void => {
-    this.renderLoopActive = false;
-    // Son bir frame daha çiz (durma anını göster)
-    this.renderFrame();
-  };
-
-  private renderFrame = (): void => {
-    this.needsRender = false;
+  private animate = (): void => {
+    this.animationId = requestAnimationFrame(this.animate);
     this.controls.update();
     this.renderer.render(this.scene, this.activeCamera);
     this.labelRenderer.render(this.scene, this.activeCamera);
-    if (this.renderLoopActive) {
-      this.animationId = requestAnimationFrame(this.renderFrame);
-    }
   };
+
+  requestRender = (): void => { /* no-op: kept for API compatibility */ };
 
   private handleResize = (): void => {
     const width = this.container.clientWidth;
