@@ -78,6 +78,8 @@ export class IFCViewerEngine {
     this.container = container;
 
     this.components = new OBC.Components();
+    // FragmentsManager MUST be initialized before IfcLoader
+    this.components.get(OBC.FragmentsManager);
     this.ifcLoader = this.components.get(OBC.IfcLoader);
 
     // Scene
