@@ -473,7 +473,6 @@ export class IFCViewerEngine {
       // Show label at click point — show ALL available labels
       if (point) {
         this.removeAllLabels();
-        let labelOffset = 0;
         
         // Show label based on selected type first, or show whatever is available
         const labelText = this.currentLabelType === 'partMark' ? partMark
