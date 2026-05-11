@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/index.js --external:@libsql/client --external:bcryptjs --external:cookie-parser --external:cors --external:dotenv --external:express --external:jsonwebtoken --external:multer --external:uuid",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "@types/multer": "^1.4.12",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.19.4",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "esbuild": "^0.24.0"
   }
 }
