@@ -850,32 +850,29 @@ export class IFCViewerEngine {
       // Debug: log found marks to console
       console.log(`[IFC Element #${expressId}] Part: ${partMark || '-'} | Assembly: ${assemblyMark || '-'} | Bolt: ${boltDimensions || '-'} | PSet count: ${propertySets.length}`);
 
-      // Etiket gösterimi: aktif label type'a gore goster
-      // Eger bolt secildiyse ve aktif type part/assembly ise, bolt bilgisini de ek olarak goster
+      // 3D etiket: her zaman aktif label type'a gore goster
+      // Bolt bilgisi sadece property panelde gosterilir
       if (point) {
         this.removeAllLabels();
 
-        if (boltDimensions) {
-          // Bu eleman bir bolt — bolt bilgisini her zaman goster (aktif type'tan bagimsiz)
-          this.showLabelAtPoint(expressId, boltDimensions, point, 'boltDimensions');
-        } else {
-          // Normal eleman — aktif label type'a gore goster
-          const labelText = this.currentLabelType === 'partMark' ? partMark
-            : this.currentLabelType === 'assemblyMark' ? assemblyMark
-            : boltDimensions;
+        const labelText = this.currentLabelType === 'partMark' ? partMark
+          : this.currentLabelType === 'assemblyMark' ? assemblyMark
+          : boltDimensions;
 
-          if (labelText) {
-            this.showLabelAtPoint(expressId, labelText, point, this.currentLabelType);
-          } else {
-            // Fallback: mevcut olan ilk bilgiyi goster
-            if (assemblyMark) {
-              this.showLabelAtPoint(expressId, assemblyMark, point, 'assemblyMark');
-            } else if (partMark) {
-              this.showLabelAtPoint(expressId, partMark, point, 'partMark');
-            }
+        if (labelText) {
+          this.showLabelAtPoint(expressId, labelText, point, this.currentLabelType);
+        } else {
+          // Aktif type icin veri yok — fallback: mevcut ilk bilgi
+          if (assemblyMark) {
+            this.showLabelAtPoint(expressId, assemblyMark, point, 'assemblyMark');
+          } else if (partMark) {
+            this.showLabelAtPoint(expressId, partMark, point, 'partMark');
+          } else if (boltDimensions) {
+            this.showLabelAtPoint(expressId, boltDimensions, point, 'boltDimensions');
           }
         }
       }
+
     } catch (err) {
       console.error('Property extraction error:', err);
     }
