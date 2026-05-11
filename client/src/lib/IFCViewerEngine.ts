@@ -2,7 +2,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import * as WebIFC from 'web-ifc';
-import * as OBC from '@thatopen/components';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+
+// Extend THREE with BVH — enables fast raycasting on all meshes globally
+(THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
+(THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
+(THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
 
 export type LabelType = 'partMark' | 'assemblyMark' | 'boltDimensions';
 
@@ -43,8 +48,6 @@ interface LoadedMesh {
 
 export class IFCViewerEngine {
   private container: HTMLDivElement;
-  private components: OBC.Components;
-  private ifcLoader: OBC.IfcLoader;
   private scene: THREE.Scene;
   private perspCamera: THREE.PerspectiveCamera;
   private orthoCamera: THREE.OrthographicCamera;
@@ -76,11 +79,6 @@ export class IFCViewerEngine {
 
   constructor(container: HTMLDivElement) {
     this.container = container;
-
-    this.components = new OBC.Components();
-    // FragmentsManager MUST be initialized before IfcLoader
-    this.components.get(OBC.FragmentsManager);
-    this.ifcLoader = this.components.get(OBC.IfcLoader);
 
     // Scene
     this.scene = new THREE.Scene();
@@ -160,7 +158,7 @@ export class IFCViewerEngine {
   }
 
   async loadIFC(url: string): Promise<void> {
-    // Initialize WebIFC for data extraction (properties/grids)
+    // Initialize WASM
     this.ifcApi.SetWasmPath('/wasm/');
     await this.ifcApi.Init();
 
@@ -170,36 +168,88 @@ export class IFCViewerEngine {
     const buffer = await response.arrayBuffer();
     const data = new Uint8Array(buffer);
 
-    // Open with WebIFC for property extraction
+    // Open the model
     this.modelID = this.ifcApi.OpenModel(data);
 
-    // Load geometry with OBC IfcLoader (InstancedMesh / Fragment - fast render)
-    await this.ifcLoader.setup({
-      wasm: { path: '/wasm/', absolute: true },
-      webIfc: { COORDINATE_TO_ORIGIN: true },
-    });
+    // Load all meshes
+    this.loadAllMeshes();
 
-    // OBC v3 load(data, coordinate, name)
-    const model = await this.ifcLoader.load(data, true, url);
+    // Parse grids
+    this.parseGrids();
+  }
 
-    // FragmentsModel has a .mesh property (THREE.Group) or iterate children
-    // Try to get renderable object
-    const modelObject3D = (model as any).object ?? (model as any).mesh ?? (model as any).group ?? model;
-    if (modelObject3D && typeof (modelObject3D as any).isObject3D !== 'undefined') {
-      this.scene.add(modelObject3D);
-    } else {
-      // Fallback: try adding all mesh children
-      const children = (model as any).children ?? [];
-      for (const child of children) this.scene.add(child as any);
+  private loadAllMeshes(): void {
+    const flatMeshes = this.ifcApi.LoadAllGeometry(this.modelID);
+
+    for (let i = 0; i < flatMeshes.size(); i++) {
+      const flatMesh = flatMeshes.get(i);
+      const expressId = flatMesh.expressID;
+      const placedGeometries = flatMesh.geometries;
+
+      for (let j = 0; j < placedGeometries.size(); j++) {
+        const placedGeometry = placedGeometries.get(j);
+        const geometry = this.ifcApi.GetGeometry(this.modelID, placedGeometry.geometryExpressID);
+
+        const verts = this.ifcApi.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
+        const indices = this.ifcApi.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
+
+        const bufferGeometry = this.createBufferGeometry(verts, indices);
+        
+        // Apply transform
+        const matrix = new THREE.Matrix4();
+        matrix.fromArray(placedGeometry.flatTransformation);
+
+        const color = placedGeometry.color;
+        const material = new THREE.MeshPhongMaterial({
+          color: new THREE.Color(color.x, color.y, color.z),
+          opacity: color.w,
+          transparent: color.w < 1,
+          side: THREE.DoubleSide,
+        });
+
+        const mesh = new THREE.Mesh(bufferGeometry, material);
+        mesh.applyMatrix4(matrix);
+        mesh.userData.expressId = expressId;
+
+        this.scene.add(mesh);
+        this.meshes.push({
+          mesh,
+          expressIds: new Uint32Array([expressId]),
+        });
+
+        geometry.delete();
+      }
     }
 
-    this.meshes.push({
-      mesh: modelObject3D as any,
-      expressIds: new Uint32Array(0),
-    });
-
+    // Fit camera to scene
     this.fitToScene();
-    this.parseGrids();
+  }
+
+  private createBufferGeometry(verts: Float32Array, indices: Uint32Array): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+
+    // web-ifc provides interleaved data: position(3) + normal(3) per vertex
+    const posFloats = new Float32Array(verts.length / 2);
+    const normFloats = new Float32Array(verts.length / 2);
+
+    for (let i = 0; i < verts.length / 6; i++) {
+      posFloats[i * 3 + 0] = verts[i * 6 + 0];
+      posFloats[i * 3 + 1] = verts[i * 6 + 1];
+      posFloats[i * 3 + 2] = verts[i * 6 + 2];
+
+      normFloats[i * 3 + 0] = verts[i * 6 + 3];
+      normFloats[i * 3 + 1] = verts[i * 6 + 4];
+      normFloats[i * 3 + 2] = verts[i * 6 + 5];
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(posFloats, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normFloats, 3));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+
+    // Build BVH acceleration structure — dramatically speeds up raycasting
+    (geometry as any).computeBoundsTree();
+
+    return geometry;
   }
 
   private fitToScene(): void {
@@ -230,22 +280,11 @@ export class IFCViewerEngine {
 
     this.raycaster.setFromCamera(this.mouse, this.activeCamera);
     const allMeshObjects = this.meshes.map(m => m.mesh);
-    const intersects = this.raycaster.intersectObjects(allMeshObjects, true);
+    const intersects = this.raycaster.intersectObjects(allMeshObjects, false);
 
     if (intersects.length > 0) {
       const hit = intersects[0];
-      let expressId = hit.object.userData.expressId as number;
-      
-      const fragment = hit.object as any;
-      if (expressId === undefined && fragment && hit.instanceId !== undefined) {
-         if (fragment.itemIDs && Array.isArray(fragment.itemIDs)) expressId = fragment.itemIDs[hit.instanceId];
-         else if (fragment.getItemID) {
-           try { expressId = fragment.getItemID(0, hit.instanceId); }
-           catch { try { expressId = fragment.getItemID(hit.instanceId); } catch {} }
-         } else if (fragment.items && Array.isArray(fragment.items)) {
-           expressId = fragment.items[hit.instanceId];
-         }
-      }
+      const expressId = hit.object.userData.expressId as number;
 
       if (expressId !== undefined) {
         // Highlight
