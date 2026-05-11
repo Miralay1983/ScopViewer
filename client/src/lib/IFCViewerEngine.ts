@@ -70,7 +70,7 @@ export class IFCViewerEngine {
     depthTest: false,
   });
   private onClickCallback?: (info: ElementInfo) => void;
-  private animationId?: number;
+  private needsRender = false;
   private currentLabelType: LabelType = 'partMark';
   private grids: GridInfo[] = [];
   private gridScaleFactor: number | null = null;
@@ -138,11 +138,7 @@ export class IFCViewerEngine {
     fillLight.position.set(-50, 50, -50);
     this.scene.add(fillLight);
 
-    // Grid
-    const grid = new THREE.GridHelper(200, 200, 0x222233, 0x151520);
-    this.scene.add(grid);
-
-    // Axes
+    // Axes helper (küçük, sadece origin'de)
     const axes = new THREE.AxesHelper(5);
     this.scene.add(axes);
 
@@ -153,8 +149,13 @@ export class IFCViewerEngine {
     container.addEventListener('click', this.handleClick);
     window.addEventListener('resize', this.handleResize);
 
-    // Render loop
-    this.animate();
+    // On-demand render: sadece kontroller hareket ettiğinde render et
+    this.controls.addEventListener('change', this.requestRender);
+    this.controls.addEventListener('start', this.startContinuousRender);
+    this.controls.addEventListener('end', this.stopContinuousRender);
+
+    // İlk frame
+    this.requestRender();
   }
 
   async loadIFC(url: string): Promise<void> {
@@ -223,6 +224,7 @@ export class IFCViewerEngine {
 
     // Fit camera to scene
     this.fitToScene();
+    this.requestRender();
   }
 
   private createBufferGeometry(verts: Float32Array, indices: Uint32Array): THREE.BufferGeometry {
@@ -310,6 +312,7 @@ export class IFCViewerEngine {
     this.highlightMesh = new THREE.Mesh(mesh.geometry.clone(), this.highlightMaterial);
     this.highlightMesh.applyMatrix4(mesh.matrixWorld);
     this.scene.add(this.highlightMesh);
+    this.requestRender();
   }
 
   private clearHighlight(): void {
@@ -317,6 +320,7 @@ export class IFCViewerEngine {
       this.scene.remove(this.highlightMesh);
       this.highlightMesh.geometry.dispose();
       this.highlightMesh = undefined;
+      this.requestRender();
     }
   }
 
@@ -670,6 +674,7 @@ export class IFCViewerEngine {
     label.position.copy(point);
     this.scene.add(label);
     this.labels.set(expressId, label);
+    this.requestRender();
   }
 
   removeLabelForElement(expressId: number): void {
@@ -677,12 +682,14 @@ export class IFCViewerEngine {
     if (label) {
       this.scene.remove(label);
       this.labels.delete(expressId);
+      this.requestRender();
     }
   }
 
   removeAllLabels(): void {
     this.labels.forEach((label) => this.scene.remove(label));
     this.labels.clear();
+    this.requestRender();
   }
 
   setLabelType(type: LabelType): void {
@@ -1073,11 +1080,38 @@ export class IFCViewerEngine {
     return this.clipDepthMm;
   }
 
-  private animate = (): void => {
-    this.animationId = requestAnimationFrame(this.animate);
+  // On-demand rendering system
+  private renderLoopActive = false;
+  private animationId?: number;
+
+  /** Tek frame render talep et */
+  requestRender = (): void => {
+    if (!this.needsRender) {
+      this.needsRender = true;
+      this.animationId = requestAnimationFrame(this.renderFrame);
+    }
+  };
+
+  /** Kontrol sürüklenirken sürekli render */
+  private startContinuousRender = (): void => {
+    this.renderLoopActive = true;
+    this.renderFrame();
+  };
+
+  private stopContinuousRender = (): void => {
+    this.renderLoopActive = false;
+    // Son bir frame daha çiz (durma anını göster)
+    this.renderFrame();
+  };
+
+  private renderFrame = (): void => {
+    this.needsRender = false;
     this.controls.update();
     this.renderer.render(this.scene, this.activeCamera);
     this.labelRenderer.render(this.scene, this.activeCamera);
+    if (this.renderLoopActive) {
+      this.animationId = requestAnimationFrame(this.renderFrame);
+    }
   };
 
   private handleResize = (): void => {
