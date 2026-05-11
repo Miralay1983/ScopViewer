@@ -76,7 +76,8 @@ export class IFCViewerEngine {
   private grids: GridInfo[] = [];
   private gridScaleFactor: number | null = null;
   private clipPlanes: THREE.Plane[] = [];
-  private clipDepthMm = 500; // default clip depth in mm
+  private clipDepthMm = 500;
+  private sectionGridObjects: THREE.Object3D[] = []; // dashed axis lines + labels
 
   constructor(container: HTMLDivElement) {
     this.container = container;
@@ -139,9 +140,7 @@ export class IFCViewerEngine {
     fillLight.position.set(-50, 50, -50);
     this.scene.add(fillLight);
 
-    // Axes helper (küçük, sadece origin'de)
-    const axes = new THREE.AxesHelper(5);
-    this.scene.add(axes);
+    // (AxesHelper kaldırıldı — akslar sadece section modda çiziliyor)
 
     // IFC API
     this.ifcApi = new WebIFC.IfcAPI();
@@ -947,6 +946,8 @@ export class IFCViewerEngine {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.1;
     this.controls.screenSpacePanning = true;
+    // Section'dan çıkınca dashed çizgileri kaldır
+    this.hideGridLines();
   }
 
   private autoDetectGridScale(size: THREE.Vector3): number {
@@ -1044,6 +1045,9 @@ export class IFCViewerEngine {
 
     this.applyClipPlanes();
     this.controls.update();
+
+    // Elevation grid lines for this vertical section
+    this.showSectionGridLines('vertical', axis.direction, size, scale);
     console.log(`[Grid] Ortho section: axis "${axis.name}" pos=${(axis.position/scale).toFixed(2)} clipD=${clipD.toFixed(2)}`);
   }
 
@@ -1077,6 +1081,8 @@ export class IFCViewerEngine {
 
     this.applyClipPlanes();
     this.controls.update();
+    // Plan view — U/V akslarını göster
+    this.showSectionGridLines('plan', 'vertical', size, scale);
     console.log(`[Grid] Ortho plan at elevation ${elevation}/${scale}=${elevY.toFixed(2)}`);
   }
 
@@ -1135,7 +1141,126 @@ export class IFCViewerEngine {
     this.labelRenderer.render(this.scene, this.activeCamera);
   };
 
-  requestRender = (): void => { /* no-op: kept for API compatibility */ };
+  requestRender = (): void => { /* no-op */ };
+
+  /** Grid akslarını kesikli beyaz çizgiler olarak çiz */
+  private showSectionGridLines(
+    viewType: 'vertical' | 'plan',
+    axisDir: 'vertical' | 'horizontal',
+    size: THREE.Vector3,
+    scale: number
+  ): void {
+    this.hideGridLines();
+
+    const box = new THREE.Box3();
+    this.meshes.forEach(({ mesh }) => box.expandByObject(mesh));
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+
+    // Modelin yatay genişliği kadar çizgi çiz (biraz aşan)
+    const halfSpan = Math.max(size.x, size.z) * 0.6;
+
+    const dashedMat = new THREE.LineDashedMaterial({
+      color: 0xffffff,
+      dashSize: 1.5,
+      gapSize: 0.8,
+      linewidth: 1,
+    });
+
+    if (viewType === 'vertical') {
+      // Dikey kesit — her kat kotunda yatay dashed çizgi göster
+      const seenElevations = new Set<number>();
+      for (const grid of this.grids) {
+        const elevM = grid.elevation / scale;
+        const key = elevM.toFixed(3);
+        if (seenElevations.has(+key)) continue;
+        seenElevations.add(+key);
+
+        // Çizgi yönü: kamera bakış yönüne göre X veya Z doğrultusunda
+        let p1: THREE.Vector3, p2: THREE.Vector3;
+        if (axisDir === 'vertical') {
+          // Kamera X'e bakıyor — çizgi Z doğrultusunda
+          p1 = new THREE.Vector3(center.x, elevM, center.z - halfSpan);
+          p2 = new THREE.Vector3(center.x, elevM, center.z + halfSpan);
+        } else {
+          // Kamera Z'ye bakıyor — çizgi X doğrultusunda
+          p1 = new THREE.Vector3(center.x - halfSpan, elevM, center.z);
+          p2 = new THREE.Vector3(center.x + halfSpan, elevM, center.z);
+        }
+
+        const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+        const line = new THREE.Line(geo, dashedMat.clone());
+        line.computeLineDistances();
+        this.scene.add(line);
+        this.sectionGridObjects.push(line);
+
+        // Etiket — sağ uçta CSS2D
+        const elevLabel = grid.elevation / 1000; // mm → m
+        const sign = elevLabel >= 0 ? '+' : '';
+        const labelText = `${sign}${elevLabel.toFixed(2)}`;
+
+        const div = document.createElement('div');
+        div.style.cssText = [
+          'color:#ffffff',
+          'font-family:Inter,sans-serif',
+          'font-size:13px',
+          'font-weight:500',
+          'letter-spacing:0.04em',
+          'padding:0 4px',
+          'pointer-events:none',
+          'white-space:nowrap',
+          'text-shadow:0 1px 3px rgba(0,0,0,0.8)',
+        ].join(';');
+        div.textContent = labelText;
+
+        const label = new CSS2DObject(div);
+        label.position.copy(p2);
+        this.scene.add(label);
+        this.sectionGridObjects.push(label);
+      }
+    } else {
+      // Plan görünüm — U ve V akslarını göster
+      const allAxes = this.getAllGridAxes();
+      const grayMat = new THREE.LineDashedMaterial({
+        color: 0xaaaaaa, dashSize: 1.2, gapSize: 0.6,
+      });
+      for (const ax of allAxes) {
+        const pos = ax.position / scale;
+        let p1: THREE.Vector3, p2: THREE.Vector3;
+        if (ax.direction === 'vertical') {
+          p1 = new THREE.Vector3(pos, center.y, center.z - halfSpan);
+          p2 = new THREE.Vector3(pos, center.y, center.z + halfSpan);
+        } else {
+          p1 = new THREE.Vector3(center.x - halfSpan, center.y, pos);
+          p2 = new THREE.Vector3(center.x + halfSpan, center.y, pos);
+        }
+        const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+        const line = new THREE.Line(geo, grayMat.clone());
+        line.computeLineDistances();
+        this.scene.add(line);
+        this.sectionGridObjects.push(line);
+
+        // Aks adı etiketi
+        const div = document.createElement('div');
+        div.style.cssText = 'color:#cccccc;font-family:Inter,sans-serif;font-size:12px;pointer-events:none;';
+        div.textContent = ax.name;
+        const label = new CSS2DObject(div);
+        label.position.copy(p2);
+        this.scene.add(label);
+        this.sectionGridObjects.push(label);
+      }
+    }
+  }
+
+  /** Tüm section grid çizgilerini ve etiketlerini kaldır */
+  hideGridLines(): void {
+    for (const obj of this.sectionGridObjects) {
+      this.scene.remove(obj);
+      if ((obj as any).geometry) (obj as any).geometry.dispose();
+      if ((obj as any).material) (obj as any).material.dispose();
+    }
+    this.sectionGridObjects = [];
+  }
 
   private handleResize = (): void => {
     const width = this.container.clientWidth;
